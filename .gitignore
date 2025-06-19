@@ -1,0 +1,10 @@
+# Ignore compiled C executables
+/practical_solutions/bin/
+
+# Other common ignores
+*.o
+*.out
+*.exe
+
+# VSCode specific
+.vscode/ 
