@@ -37,7 +37,7 @@ int main() {
 
     write(fd[P_WRITE], wBuffer, strlen(wBuffer) + 1); // +1 for null terminator
     close(fd[P_WRITE]);
-
+    
     wait(NULL); // Wait for child to finish
     exit(EXIT_SUCCESS);
 }

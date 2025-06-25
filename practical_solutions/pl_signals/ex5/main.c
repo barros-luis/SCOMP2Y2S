@@ -34,7 +34,7 @@ int main(int argc,char *argv[]) {
     // Stop all except the first
     for (int i = 1; i < n; i++){
         kill(pids[i], SIGSTOP);
-    }
+    } 
 
     int current = 0;
     while(1){

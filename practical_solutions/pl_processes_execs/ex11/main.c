@@ -11,17 +11,17 @@
 
 char create_twins(pid_t list[2]) {
     pid_t pid1, pid2;
-    
+
     // Create first child
     pid1 = fork();
     if (pid1 < 0) {
         perror("First fork failed");
         exit(EXIT_FAILURE);
     }
-    
+
     if (pid1 == 0) {
         // First child process
-        return 'a';
+                return 'a';
     }
     
     // Parent process continues here
@@ -34,8 +34,8 @@ char create_twins(pid_t list[2]) {
     
     if (pid2 == 0) {
         // Second child process
-        return 'b';
-    }
+                return 'b';
+            }
     
     list[0] = pid1;  // First child PID
     list[1] = pid2;  // Second child PID
