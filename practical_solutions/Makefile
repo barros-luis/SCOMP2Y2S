@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c11 -g -pthread
+CFLAGS = -Wall -Wextra -std=c11 -g -pthread -lrt
 TARGET = program
 SRC = main.c
 
