@@ -41,6 +41,7 @@ int main() {
     // Clean up
     munmap(student_info, sizeof(shared_student));
     close(fd);
+    shm_unlink("/writer");
 
     exit(EXIT_SUCCESS);
 } 
