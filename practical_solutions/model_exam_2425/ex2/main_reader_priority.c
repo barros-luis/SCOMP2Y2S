@@ -8,24 +8,26 @@
 // --- Configuration ---
 #define NUM_WRITERS 3
 #define NUM_READERS 10
-#define WRITE_ITERATIONS 2 // How many times each writer will write
-#define READ_ITERATIONS 3  // How many times each reader will read
+#define WRITE_ITERATIONS 2
+#define READ_ITERATIONS 3
 
 // --- Shared Data Structure ---
-// This is the data that will be protected.
 typedef struct {
     char string1[50];
     char string2[50];
 } SharedData;
 
 // --- Global Shared Variables ---
-SharedData* shared_resource; // The actual shared data, allocated on the heap.
-int reader_count = 0;        // Counts how many readers are currently active.
+SharedData* shared_resource;
+int reader_count = 0;
+int writer_count = 0;
+int waiting_writers = 0;  // Writers waiting to write
 
 // --- Synchronization Primitives ---
-pthread_mutex_t rw_mutex;     // Main lock: Writers must acquire this. First reader acquires it, last reader releases it.
-pthread_mutex_t count_mutex;  // Secondary lock: Protects access to the 'reader_count' variable.
-pthread_mutex_t print_mutex;  // Tertiary lock: Ensures clean, non-interleaved terminal output.
+pthread_mutex_t mutex;
+pthread_cond_t reader_cond;
+pthread_cond_t writer_cond;
+pthread_mutex_t print_mutex;
 
 // --- Writer Thread Logic ---
 void* writer(void* arg) {
@@ -33,25 +35,40 @@ void* writer(void* arg) {
 
     for (int i = 0; i < WRITE_ITERATIONS; i++) {
         // --- Entry Section ---
-        pthread_mutex_lock(&rw_mutex); // A writer must acquire the main lock to enter.
-                                       // It will block here if any readers are active or another writer is active.
+        pthread_mutex_lock(&mutex);
+        waiting_writers++;  // Announce we want to write
+        
+        // Wait until no readers are active (reader priority)
+        while (reader_count > 0 || writer_count > 0) {
+            pthread_cond_wait(&writer_cond, &mutex);
+        }
+        
+        waiting_writers--;  // No longer waiting
+        writer_count++;     // Now we're writing
+        pthread_mutex_unlock(&mutex);
 
         // --- Critical Section ---
         time_t now = time(NULL);
         struct tm* t = localtime(&now);
         
         snprintf(shared_resource->string1, sizeof(shared_resource->string1), "Writer ID: %ld", id);
-        // Simple timestamp using strftime
         strftime(shared_resource->string2, sizeof(shared_resource->string2), "%Y-%m-%d %H:%M:%S", t);
         
-        // Lock the print mutex to ensure the output block is atomic.
         pthread_mutex_lock(&print_mutex);
         printf("--- Writer %ld wrote. ---\n", id);
         printf("    Content: %s\n\n", shared_resource->string2);
         pthread_mutex_unlock(&print_mutex);
 
         // --- Exit Section ---
-        pthread_mutex_unlock(&rw_mutex); // Release the lock, allowing other writers or readers to proceed.
+        pthread_mutex_lock(&mutex);
+        writer_count--;
+        
+        // Signal waiting readers first (priority), then writers
+        pthread_cond_broadcast(&reader_cond);
+        if (waiting_writers > 0) {
+            pthread_cond_signal(&writer_cond);
+        }
+        pthread_mutex_unlock(&mutex);
     }
 
     return NULL;
@@ -63,18 +80,17 @@ void* reader(void* arg) {
 
     for (int i = 0; i < READ_ITERATIONS; i++) {
         // --- Entry Section ---
-        pthread_mutex_lock(&count_mutex); // Lock to safely modify the reader_count
-        reader_count++;
-        if (reader_count == 1) {
-            // If this is the *first* reader, it must acquire the main lock.
-            // This effectively blocks any waiting writers.
-            pthread_mutex_lock(&rw_mutex);
+        pthread_mutex_lock(&mutex);
+        
+        // Wait only if a writer is currently writing
+        while (writer_count > 0) {
+            pthread_cond_wait(&reader_cond, &mutex);
         }
-        pthread_mutex_unlock(&count_mutex); // Unlock the counter mutex.
+        
+        reader_count++;
+        pthread_mutex_unlock(&mutex);
 
         // --- Critical Section ---
-        // To prevent messy output, we copy the data to local variables first
-        // and then print it inside a dedicated print lock.
         char local_str1[50];
         char local_str2[50];
         int current_readers;
@@ -82,35 +98,32 @@ void* reader(void* arg) {
         strcpy(local_str1, shared_resource->string1);
         strcpy(local_str2, shared_resource->string2);
 
-        // We lock count_mutex only to get a consistent value for printing.
-        pthread_mutex_lock(&count_mutex);
+        pthread_mutex_lock(&mutex);
         current_readers = reader_count;
-        pthread_mutex_unlock(&count_mutex);
+        pthread_mutex_unlock(&mutex);
 
-        // Now, lock the print mutex to ensure the entire block prints without interruption.
         pthread_mutex_lock(&print_mutex);
         printf("Reader %ld read:\n", id);
         printf("  -> \"%s\"\n", local_str1);
         printf("  -> \"%s\"\n", local_str2);
-        printf("  (Active Readers now: %d)\n\n", current_readers);
+        printf("  (Active Readers: %d, Waiting Writers: %d)\n\n", current_readers, waiting_writers);
         pthread_mutex_unlock(&print_mutex);
         
         // --- Exit Section ---
-        pthread_mutex_lock(&count_mutex); // Lock to safely modify the reader_count
+        pthread_mutex_lock(&mutex);
         reader_count--;
-        if (reader_count == 0) {
-            // If this is the *last* reader leaving, it must release the main lock.
-            // This signals to any waiting writers that they can now proceed.
-            pthread_mutex_unlock(&rw_mutex);
+        
+        // If this was the last reader and writers are waiting, signal them
+        if (reader_count == 0 && waiting_writers > 0) {
+            pthread_cond_signal(&writer_cond);
         }
-        pthread_mutex_unlock(&count_mutex);
+        pthread_mutex_unlock(&mutex);
 
-        sleep(1); // Simulate doing other work
+        sleep(1);
     }
 
     return NULL;
 }
-
 
 // --- Main Program ---
 int main() {
@@ -120,11 +133,12 @@ int main() {
         perror("Failed to allocate shared memory");
         return 1;
     }
-    sprintf(shared_resource->string1, "Initial Data");
-    sprintf(shared_resource->string2, "No timestamp yet");
+    snprintf(shared_resource->string1, sizeof(shared_resource->string1), "Initial Data");
+    snprintf(shared_resource->string2, sizeof(shared_resource->string2), "No timestamp yet");
 
-    pthread_mutex_init(&rw_mutex, NULL);
-    pthread_mutex_init(&count_mutex, NULL);
+    pthread_mutex_init(&mutex, NULL);
+    pthread_cond_init(&reader_cond, NULL);
+    pthread_cond_init(&writer_cond, NULL);
     pthread_mutex_init(&print_mutex, NULL);
 
     pthread_t writer_threads[NUM_WRITERS];
@@ -138,7 +152,7 @@ int main() {
         pthread_create(&reader_threads[i], NULL, reader, (void*)i);
     }
 
-    // 3. Wait for Threads to Complete (Join)
+    // 3. Wait for Threads to Complete
     for (int i = 0; i < NUM_WRITERS; i++) {
         pthread_join(writer_threads[i], NULL);
     }
@@ -147,12 +161,13 @@ int main() {
     }
 
     // 4. Cleanup
-    pthread_mutex_destroy(&rw_mutex);
-    pthread_mutex_destroy(&count_mutex);
+    pthread_mutex_destroy(&mutex);
+    pthread_cond_destroy(&reader_cond);
+    pthread_cond_destroy(&writer_cond);
     pthread_mutex_destroy(&print_mutex);
     free(shared_resource);
 
     printf("All threads have finished.\n");
 
     return 0;
-}
+} 
